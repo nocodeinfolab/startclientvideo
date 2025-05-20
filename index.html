@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Video Sessions</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f7fa;
+            color: #333;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .session-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .session-card {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            transition: transform 0.2s;
+        }
+        
+        .session-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .session-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #3498db;
+        }
+        
+        .session-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }
+        
+        .session-time {
+            font-family: monospace;
+            font-size: 15px;
+        }
+        
+        .btn {
+            background-color: #2ecc71;
+            border: none;
+            color: white;
+            padding: 12px 20px;
+            text-align: center;
+            text-decoration: none;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            background-color: #27ae60;
+        }
+        
+        .btn-end {
+            background-color: #e74c3c;
+        }
+        
+        .btn-end:hover {
+            background-color: #c0392b;
+        }
+        
+        #videoContainer {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        video {
+            width: 100%;
+            height: auto;
+            max-height: 400px;
+            background-color: #ecf0f1;
+            border-radius: 8px;
+            object-fit: cover;
+        }
+        
+        #localVideo {
+            transform: scaleX(-1);
+            border: 3px solid #2ecc71;
+        }
+        
+        .status-container {
+            background-color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .status {
+            margin: 0;
+            color: #2c3e50;
+            font-weight: 500;
+        }
+        
+        .error {
+            color: #e74c3c;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #fadbd8;
+            border-radius: 5px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+            font-size: 18px;
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 768px) {
+            body {
+                padding: 15px;
+            }
+            
+            .session-list {
+                grid-template-columns: 1fr;
+            }
+            
+            .session-card {
+                padding: 15px;
+            }
+            
+            #videoContainer {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="sessionsView">
+        <h1>Your Scheduled Sessions</h1>
+        <div id="sessionsContainer" class="session-list">
+            <div class="loading">Loading your sessions...</div>
+        </div>
+    </div>
+    
+    <div id="videoCallView" class="hidden">
+        <h1>Video Session</h1>
+        
+        <div class="status-container">
+            <p id="status" class="status">Connecting to session...</p>
+            <div id="error" class="error hidden"></div>
+        </div>
+        
+        <button id="endCallButton" class="btn btn-end">Leave Session</button>
+        
+        <div id="videoContainer">
+            <video id="localVideo" autoplay muted></video>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@latest/dist/livekit-client.umd.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-firestore.js"></script>
+    
+    <script>
+        // Firebase configuration (same as provider)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDjWX_BvuRa-3-c4nhVupoVDPoQCmkcWlc",
+            authDomain: "psy-clinic-1e0b1.firebaseapp.com",
+            projectId: "psy-clinic-1e0b1",
+            storageBucket: "psy-clinic-1e0b1.appspot.com",
+            messagingSenderId: "455712351090",
+            appId: "1:455712351090:web:8df100aa7cc657bd31f3eb"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // DOM Elements
+            const sessionsView = document.getElementById('sessionsView');
+            const videoCallView = document.getElementById('videoCallView');
+            const sessionsContainer = document.getElementById('sessionsContainer');
+            const endCallButton = document.getElementById('endCallButton');
+            const videoContainer = document.getElementById('videoContainer');
+            const statusElement = document.getElementById('status');
+            const errorElement = document.getElementById('error');
+            
+            // Configuration
+            const LIVEKIT_URL = 'wss://psy-cliniq-s70l8vu6.ojeddah1a.production.livekit.cloud';
+            
+            // State variables
+            let room;
+            let localStream;
+            let currentSessionId;
+            
+            // Get email from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const userEmail = urlParams.get('email');
+            
+            if (!userEmail) {
+                showError('No email specified in URL');
+                return;
+            }
+            
+            // Initialize UI
+            setupEventListeners();
+            loadSessions();
+            
+            function setupEventListeners() {
+                endCallButton.addEventListener('click', endVideoCall);
+            }
+            
+            async function loadSessions() {
+                try {
+                    const sessions = await fetchSessions(userEmail);
+                    
+                    if (sessions.length === 0) {
+                        sessionsContainer.innerHTML = '<p>No scheduled sessions found.</p>';
+                        return;
+                    }
+                    
+                    renderSessions(sessions);
+                } catch (error) {
+                    showError(`Failed to load sessions: ${error.message}`);
+                    sessionsContainer.innerHTML = `<p class="error">Error loading sessions: ${error.message}</p>`;
+                }
+            }
+            
+            async function fetchSessions(email) {
+                try {
+                    const querySnapshot = await db.collection('booked_sessions')
+                        .where('user_email', '==', email)
+                        .where('status', '==', 'active')
+                        .get();
+                    
+                    return querySnapshot.docs.map(doc => {
+                        const data = doc.data();
+                        return {
+                            id: doc.id,
+                            provider_name: data.provider_name || 'Provider',
+                            booked_date: data.booked_date || 'Not specified',
+                            booked_time: data.booked_time || 'Not specified',
+                            token: data.token || null
+                        };
+                    });
+                } catch (error) {
+                    console.error('Error fetching sessions:', error);
+                    throw error;
+                }
+            }
+            
+            function renderSessions(sessions) {
+                sessionsContainer.innerHTML = '';
+                
+                sessions.forEach(session => {
+                    const sessionCard = document.createElement('div');
+                    sessionCard.className = 'session-card';
+                    
+                    const sessionTitle = document.createElement('div');
+                    sessionTitle.className = 'session-title';
+                    sessionTitle.textContent = `Session with ${session.provider_name}`;
+                    
+                    const sessionMeta = document.createElement('div');
+                    sessionMeta.className = 'session-meta';
+                    
+                    const bookedDate = document.createElement('div');
+                    bookedDate.textContent = `Date: ${session.booked_date}`;
+                    
+                    const bookedTime = document.createElement('div');
+                    bookedTime.textContent = `Time: ${session.booked_time}`;
+                    
+                    sessionMeta.appendChild(bookedDate);
+                    sessionMeta.appendChild(bookedTime);
+                    
+                    const joinButton = document.createElement('button');
+                    joinButton.className = 'btn';
+                    joinButton.textContent = 'Join Session';
+                    joinButton.addEventListener('click', () => joinVideoCall(session));
+                    
+                    sessionCard.appendChild(sessionTitle);
+                    sessionCard.appendChild(sessionMeta);
+                    sessionCard.appendChild(joinButton);
+                    
+                    sessionsContainer.appendChild(sessionCard);
+                });
+            }
+            
+            async function joinVideoCall(session) {
+                try {
+                    if (!session.token) {
+                        throw new Error('Session not ready - provider has not started the session yet');
+                    }
+                    
+                    currentSessionId = session.id;
+                    
+                    sessionsView.classList.add('hidden');
+                    videoCallView.classList.remove('hidden');
+                    resetUI();
+                    updateStatus('Connecting to session...');
+                    
+                    // 1. Get media permissions
+                    localStream = await getMediaAccess();
+                    if (!localStream) return;
+                    
+                    // 2. Connect using stored token
+                    room = await connectToRoom(LIVEKIT_URL, session.token);
+                    
+                    // 3. Setup UI
+                    setupVideoElements();
+                    setupRoomEventListeners();
+                    
+                    updateStatus('Connected to session!');
+                    
+                } catch (error) {
+                    console.error('Error joining session:', error);
+                    showError(error.message);
+                    endVideoCall();
+                }
+            }
+            
+            async function endVideoCall() {
+                cleanup();
+                videoCallView.classList.add('hidden');
+                sessionsView.classList.remove('hidden');
+                loadSessions(); // Refresh session list
+            }
+            
+            async function getMediaAccess() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: true,
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 },
+                            facingMode: 'user'
+                        }
+                    });
+                    return stream;
+                } catch (error) {
+                    showError(`Could not access media devices: ${error.message}`);
+                    return null;
+                }
+            }
+            
+            async function connectToRoom(url, token) {
+                try {
+                    const room = new LivekitClient.Room({
+                        adaptiveStream: true,
+                        dynacast: true,
+                        videoCaptureDefaults: {
+                            resolution: LivekitClient.VideoPresets.h720.resolution
+                        }
+                    });
+                    
+                    await room.connect(url, token, {
+                        autoSubscribe: true,
+                    });
+                    
+                    if (localStream) {
+                        const videoTrack = localStream.getVideoTracks()[0];
+                        const audioTrack = localStream.getAudioTracks()[0];
+                        
+                        if (videoTrack) {
+                            await room.localParticipant.publishTrack(videoTrack, {
+                                name: 'webcam',
+                                simulcast: true,
+                            });
+                        }
+                        
+                        if (audioTrack) {
+                            await room.localParticipant.publishTrack(audioTrack, {
+                                name: 'microphone'
+                            });
+                        }
+                    }
+                    
+                    return room;
+                } catch (error) {
+                    throw new Error(`Connection failed: ${error.message}`);
+                }
+            }
+            
+            function setupVideoElements() {
+                videoContainer.innerHTML = '';
+                
+                const localVideo = document.createElement('video');
+                localVideo.id = 'localVideo';
+                localVideo.autoplay = true;
+                localVideo.muted = true;
+                videoContainer.appendChild(localVideo);
+                
+                if (localStream) {
+                    localVideo.srcObject = localStream;
+                }
+            }
+            
+            function setupRoomEventListeners() {
+                if (!room) return;
+                
+                room.on('participantConnected', participant => {
+                    if (participant !== room.localParticipant) {
+                        updateStatus(`${participant.identity} joined the session`);
+                        addParticipantVideo(participant);
+                    }
+                });
+                
+                room.on('participantDisconnected', participant => {
+                    updateStatus(`${participant.identity} left the session`);
+                    removeParticipantVideo(participant.sid);
+                });
+                
+                room.on('disconnected', () => {
+                    updateStatus('Disconnected from session');
+                    endVideoCall();
+                });
+            }
+            
+            function addParticipantVideo(participant) {
+                const video = document.createElement('video');
+                video.autoplay = true;
+                video.setAttribute('data-participant', participant.sid);
+                videoContainer.appendChild(video);
+                
+                participant.tracks.forEach(publication => {
+                    if (publication.track && publication.isSubscribed) {
+                        publication.track.attach(video);
+                    }
+                });
+            }
+            
+            function removeParticipantVideo(participantSid) {
+                document.querySelectorAll(`[data-participant="${participantSid}"]`).forEach(el => el.remove());
+            }
+            
+            function updateStatus(message) {
+                statusElement.textContent = message;
+                hideError();
+            }
+            
+            function showError(message) {
+                errorElement.textContent = message;
+                errorElement.classList.remove('hidden');
+            }
+            
+            function hideError() {
+                errorElement.classList.add('hidden');
+            }
+            
+            function resetUI() {
+                videoContainer.innerHTML = '';
+                hideError();
+            }
+            
+            function cleanup() {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+                if (room) {
+                    room.disconnect();
+                    room = null;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
