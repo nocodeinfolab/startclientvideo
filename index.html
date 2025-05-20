@@ -256,7 +256,7 @@
                 try {
                     const querySnapshot = await db.collection('booked_sessions')
                         .where('user_email', '==', email)
-                        .where('confirmed', '==', 'true')
+                        .where('confirmed', '==', true)
                         .get();
                     
                     return querySnapshot.docs.map(doc => {
