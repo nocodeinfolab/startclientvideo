@@ -258,8 +258,8 @@
                 try {
                     const querySnapshot = await db.collection('booked_sessions')
                         .where('user_email', '==', email)
-                        .where('confirmed', '==', true)
-                        .where('status', 'in', ['scheduled', 'active'])
+                        //.where('confirmed', '==', true)
+                        //.where('status', 'in', ['scheduled', 'active'])
                         .get();
                     
                     return querySnapshot.docs.map(doc => {
