@@ -421,13 +421,14 @@
                 }
             }
             
-            async function connectToRoom(url, token) {
+                        async function connectToRoom(url, token) {
                 try {
-                    const room = new LivekitClient.Room({
+                    // Create a new room instance
+                    const room = new LiveKitClient.Room({
                         adaptiveStream: true,
                         dynacast: true,
                         videoCaptureDefaults: {
-                            resolution: LivekitClient.VideoPresets.h720.resolution
+                            resolution: LiveKitClient.VideoPresets.h720.resolution
                         },
                         publishDefaults: {
                             simulcast: true,
@@ -446,7 +447,7 @@
                         if (videoTrack) {
                             await room.localParticipant.publishTrack(videoTrack, {
                                 name: 'client-webcam',
-                                source: LivekitClient.TrackSource.CAMERA,
+                                source: LiveKitClient.Track.Source.CAMERA,  // Updated path to Source
                                 simulcast: true
                             });
                         }
@@ -454,7 +455,7 @@
                         if (audioTrack) {
                             await room.localParticipant.publishTrack(audioTrack, {
                                 name: 'client-microphone',
-                                source: LivekitClient.TrackSource.MICROPHONE
+                                source: LiveKitClient.Track.Source.MICROPHONE  // Updated path to Source
                             });
                         }
                     }
