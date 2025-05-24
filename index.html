@@ -213,11 +213,13 @@
             
             // Configuration
             const LIVEKIT_URL = 'wss://psy-cliniq-s70l8vu6.ojeddah1a.production.livekit.cloud';
+            const POLL_INTERVAL = 5000; // Check for session updates every 5 seconds
             
             // State variables
             let room;
             let localStream;
             let currentSessionId;
+            let sessionCheckInterval;
             
             // Get email from URL
             const urlParams = new URLSearchParams(window.location.search);
@@ -257,6 +259,7 @@
                     const querySnapshot = await db.collection('booked_sessions')
                         .where('user_email', '==', email)
                         .where('confirmed', '==', true)
+                        .where('status', 'in', ['scheduled', 'active'])
                         .get();
                     
                     return querySnapshot.docs.map(doc => {
@@ -266,7 +269,8 @@
                             provider_name: data.provider_name || 'Provider',
                             booked_date: data.booked_date || 'Not specified',
                             booked_time: data.booked_time || 'Not specified',
-                            token: data.token || null
+                            token: data.token || null,
+                            status: data.status || 'scheduled'
                         };
                     });
                 } catch (error) {
@@ -295,12 +299,18 @@
                     const bookedTime = document.createElement('div');
                     bookedTime.textContent = `Time: ${session.booked_time}`;
                     
+                    const sessionStatus = document.createElement('div');
+                    sessionStatus.textContent = `Status: ${session.status}`;
+                    sessionStatus.style.color = session.status === 'active' ? '#27ae60' : '#e67e22';
+                    
                     sessionMeta.appendChild(bookedDate);
                     sessionMeta.appendChild(bookedTime);
+                    sessionMeta.appendChild(sessionStatus);
                     
                     const joinButton = document.createElement('button');
                     joinButton.className = 'btn';
-                    joinButton.textContent = 'Join Session';
+                    joinButton.textContent = session.status === 'active' ? 'Join Session' : 'Session Not Ready';
+                    joinButton.disabled = session.status !== 'active';
                     joinButton.addEventListener('click', () => joinVideoCall(session));
                     
                     sessionCard.appendChild(sessionTitle);
@@ -314,11 +324,10 @@
             async function joinVideoCall(session) {
                 try {
                     if (!session.token) {
-                        throw new Error('Session not ready - provider has not started the session yet');
+                        throw new Error('Session not ready - provider has not started yet');
                     }
                     
                     currentSessionId = session.id;
-                    
                     sessionsView.classList.add('hidden');
                     videoCallView.classList.remove('hidden');
                     resetUI();
@@ -329,6 +338,7 @@
                     if (!localStream) return;
                     
                     // 2. Connect using stored token
+                    updateStatus('Joining session...');
                     room = await connectToRoom(LIVEKIT_URL, session.token);
                     
                     // 3. Setup UI
@@ -337,6 +347,9 @@
                     
                     updateStatus('Connected to session!');
                     
+                    // Start polling for session updates
+                    sessionCheckInterval = setInterval(checkSessionStatus, POLL_INTERVAL);
+                    
                 } catch (error) {
                     console.error('Error joining session:', error);
                     showError(error.message);
@@ -344,8 +357,21 @@
                 }
             }
             
+            async function checkSessionStatus() {
+                try {
+                    const doc = await db.collection('booked_sessions').doc(currentSessionId).get();
+                    if (!doc.exists || doc.data().status !== 'active') {
+                        updateStatus('Session ended by provider');
+                        endVideoCall();
+                    }
+                } catch (error) {
+                    console.error('Error checking session status:', error);
+                }
+            }
+            
             async function endVideoCall() {
                 cleanup();
+                if (sessionCheckInterval) clearInterval(sessionCheckInterval);
                 videoCallView.classList.add('hidden');
                 sessionsView.classList.remove('hidden');
                 loadSessions(); // Refresh session list
@@ -388,14 +414,13 @@
                         
                         if (videoTrack) {
                             await room.localParticipant.publishTrack(videoTrack, {
-                                name: 'webcam',
-                                simulcast: true,
+                                name: 'client-webcam',
                             });
                         }
                         
                         if (audioTrack) {
                             await room.localParticipant.publishTrack(audioTrack, {
-                                name: 'microphone'
+                                name: 'client-microphone'
                             });
                         }
                     }
@@ -424,8 +449,8 @@
                 if (!room) return;
                 
                 room.on('participantConnected', participant => {
-                    if (participant !== room.localParticipant) {
-                        updateStatus(`${participant.identity} joined the session`);
+                    if (participant !== room.localParticipant && participant.identity.startsWith('provider-')) {
+                        updateStatus(`Provider joined: ${participant.identity}`);
                         addParticipantVideo(participant);
                     }
                 });
@@ -433,6 +458,14 @@
                 room.on('participantDisconnected', participant => {
                     updateStatus(`${participant.identity} left the session`);
                     removeParticipantVideo(participant.sid);
+                });
+                
+                room.on('trackPublished', (publication, participant) => {
+                    console.log('Track published by', participant.identity, publication.trackSid);
+                });
+                
+                room.on('trackUnpublished', (publication, participant) => {
+                    console.log('Track unpublished by', participant.identity, publication.trackSid);
                 });
                 
                 room.on('disconnected', () => {
