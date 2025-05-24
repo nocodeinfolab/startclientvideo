@@ -213,13 +213,16 @@
             
             // Configuration
             const LIVEKIT_URL = 'wss://psy-cliniq-s70l8vu6.ojeddah1a.production.livekit.cloud';
-            const POLL_INTERVAL = 5000; // Check for session updates every 5 seconds
+            const TOKEN_SERVER_URL = 'https://livekittoken.onrender.com/get-token';
+            const POLL_INTERVAL = 5000;
             
             // State variables
             let room;
             let localStream;
             let currentSessionId;
             let sessionCheckInterval;
+            let reconnectAttempts = 0;
+            const MAX_RECONNECT_ATTEMPTS = 3;
             
             // Get email from URL
             const urlParams = new URLSearchParams(window.location.search);
@@ -258,8 +261,8 @@
                 try {
                     const querySnapshot = await db.collection('booked_sessions')
                         .where('user_email', '==', email)
-                        //.where('confirmed', '==', true)
-                        //.where('status', 'in', ['scheduled', 'active'])
+                        .where('confirmed', '==', true)
+                        .where('status', 'in', ['scheduled', 'active'])
                         .get();
                     
                     return querySnapshot.docs.map(doc => {
@@ -269,7 +272,6 @@
                             provider_name: data.provider_name || 'Provider',
                             booked_date: data.booked_date || 'Not specified',
                             booked_time: data.booked_time || 'Not specified',
-                            token: data.token || null,
                             status: data.status || 'scheduled'
                         };
                     });
@@ -323,37 +325,62 @@
             
             async function joinVideoCall(session) {
                 try {
-                    if (!session.token) {
-                        throw new Error('Session not ready - provider has not started yet');
-                    }
-                    
                     currentSessionId = session.id;
+                    reconnectAttempts = 0;
+                    
                     sessionsView.classList.add('hidden');
                     videoCallView.classList.remove('hidden');
                     resetUI();
-                    updateStatus('Connecting to session...');
+                    updateStatus('Initializing session...');
                     
                     // 1. Get media permissions
                     localStream = await getMediaAccess();
                     if (!localStream) return;
+
+                    // 2. Generate client token
+                    updateStatus('Getting session token...');
+                    const { token } = await getClientToken(session.id, userEmail);
                     
-                    // 2. Connect using stored token
+                    // 3. Connect to room
                     updateStatus('Joining session...');
-                    room = await connectToRoom(LIVEKIT_URL, session.token);
+                    room = await connectToRoom(LIVEKIT_URL, token);
                     
-                    // 3. Setup UI
+                    // 4. Setup UI
                     setupVideoElements();
                     setupRoomEventListeners();
                     
                     updateStatus('Connected to session!');
                     
-                    // Start polling for session updates
+                    // Start polling for session status
                     sessionCheckInterval = setInterval(checkSessionStatus, POLL_INTERVAL);
                     
                 } catch (error) {
                     console.error('Error joining session:', error);
                     showError(error.message);
                     endVideoCall();
+                }
+            }
+            
+            async function getClientToken(roomName, email) {
+                try {
+                    const response = await fetch(TOKEN_SERVER_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            roomName: roomName,
+                            participantName: email,
+                            isProvider: false
+                        }),
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.text();
+                        throw new Error(error || 'Failed to get token');
+                    }
+                    
+                    return await response.json();
+                } catch (error) {
+                    throw new Error(`Token server error: ${error.message}`);
                 }
             }
             
@@ -374,7 +401,7 @@
                 if (sessionCheckInterval) clearInterval(sessionCheckInterval);
                 videoCallView.classList.add('hidden');
                 sessionsView.classList.remove('hidden');
-                loadSessions(); // Refresh session list
+                loadSessions();
             }
             
             async function getMediaAccess() {
@@ -401,6 +428,10 @@
                         dynacast: true,
                         videoCaptureDefaults: {
                             resolution: LivekitClient.VideoPresets.h720.resolution
+                        },
+                        publishDefaults: {
+                            simulcast: true,
+                            videoCodec: 'vp8'
                         }
                     });
                     
@@ -415,12 +446,15 @@
                         if (videoTrack) {
                             await room.localParticipant.publishTrack(videoTrack, {
                                 name: 'client-webcam',
+                                source: LivekitClient.TrackSource.CAMERA,
+                                simulcast: true
                             });
                         }
                         
                         if (audioTrack) {
                             await room.localParticipant.publishTrack(audioTrack, {
-                                name: 'client-microphone'
+                                name: 'client-microphone',
+                                source: LivekitClient.TrackSource.MICROPHONE
                             });
                         }
                     }
@@ -468,9 +502,21 @@
                     console.log('Track unpublished by', participant.identity, publication.trackSid);
                 });
                 
-                room.on('disconnected', () => {
-                    updateStatus('Disconnected from session');
-                    endVideoCall();
+                room.on('disconnected', async () => {
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        reconnectAttempts++;
+                        updateStatus(`Disconnected. Reconnecting (attempt ${reconnectAttempts})...`);
+                        try {
+                            await room.connect(LIVEKIT_URL, room.token);
+                            updateStatus('Reconnected successfully!');
+                        } catch (err) {
+                            console.error('Reconnect failed:', err);
+                            endVideoCall();
+                        }
+                    } else {
+                        updateStatus('Session ended');
+                        endVideoCall();
+                    }
                 });
             }
             
